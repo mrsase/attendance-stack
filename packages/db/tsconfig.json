@@ -1,0 +1,11 @@
+{
+  "extends": "../typescript-config/server.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "prisma/**/*"]
+}

@@ -8,10 +8,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint --max-warnings 0",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "prisma:generate": "prisma generate --schema ../../packages/db/prisma/schema.prisma",
+    "postinstall": "pnpm run prisma:generate"
   },
   "dependencies": {
     "@repo/ui": "workspace:*",
+    "@repo/db": "workspace:*",
+    "@prisma/client": "^6.16.2",
     "next": "^15.5.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
@@ -23,6 +27,8 @@
     "@types/react": "19.1.0",
     "@types/react-dom": "19.1.1",
     "eslint": "^9.34.0",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "prisma": "^6.16.2"
+
   }
 }

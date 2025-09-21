@@ -1,0 +1,172 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  IT_MANAGER
+  HR_MANAGER
+  DIRECTOR
+  MANAGER
+  EMPLOYEE
+  CEO
+}
+
+enum AttendanceType {
+  CLOCK_IN
+  CLOCK_OUT
+}
+
+enum AttendanceSource {
+  MOBILE
+  WEB
+  KIOSK
+}
+
+enum LeaveKind {
+  HOURLY
+  DAILY
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  departments Department[]
+  users       User[]
+  workSites   WorkSite[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  Holiday Holiday[]
+}
+
+model Department {
+  id        String        @id @default(cuid())
+  orgId     String
+  org       Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name      String
+  parentId  String?
+  users     User[]
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@unique([orgId, name])
+  RoleAssignment RoleAssignment[]
+}
+
+model User {
+  id            String          @id @default(cuid())
+  orgId         String
+  org           Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  email         String          @unique
+  name          String
+  phone         String?
+  passwordHash  String?
+  isActive      Boolean         @default(true)
+  timeZone      String?
+  departmentId  String?
+  department    Department?     @relation(fields: [departmentId], references: [id])
+  roles         RoleAssignment[]
+  attendance    AttendanceEvent[]
+  leaves        LeaveRequest[]  @relation("LeaveOwner")
+  approvals     LeaveRequest[]  @relation("LeaveApprover")
+  auditLogs     AuditLog[]      @relation("AuditActor")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+}
+
+model RoleAssignment {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role
+  departmentId String?
+  department   Department?  @relation(fields: [departmentId], references: [id])
+  createdAt    DateTime     @default(now())
+
+  @@index([userId, role])
+}
+
+model WorkSite {
+  id            String       @id @default(cuid())
+  orgId         String
+  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name          String
+  latitude      Decimal      @db.Decimal(9,6)
+  longitude     Decimal      @db.Decimal(9,6)
+  radiusMeters  Int          @default(100)
+  wifiSSIDs     String[]     @db.Text
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model AttendanceEvent {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            AttendanceType
+  source          AttendanceSource
+  at              DateTime         @default(now())
+  latitude        Decimal?         @db.Decimal(9,6)
+  longitude       Decimal?         @db.Decimal(9,6)
+  withinGeofence  Boolean?
+  ip              String?
+  wifiBSSID       String?
+  notes           String?
+  createdAt       DateTime         @default(now())
+
+  @@index([userId, at])
+}
+
+model LeaveRequest {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation("LeaveOwner", fields: [userId], references: [id], onDelete: Cascade)
+  kind        LeaveKind
+  status      LeaveStatus @default(PENDING)
+  reason      String?
+  startAt     DateTime
+  endAt       DateTime
+  approverId  String?
+  approver    User?       @relation("LeaveApprover", fields: [approverId], references: [id])
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([userId, startAt, endAt])
+}
+
+model Holiday {
+  id        String    @id @default(cuid())
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  date      DateTime
+  label     String
+  createdAt DateTime  @default(now())
+
+  @@unique([orgId, date])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation("AuditActor", fields: [actorId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  data      Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+}
