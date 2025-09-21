@@ -16,14 +16,34 @@ type EventItem = {
 type TodayResponse = {
   ok: true;
   currentAction: 'CLOCK_IN' | 'CLOCK_OUT';
+  status: 'IN' | 'OUT';
+  since: string | null;
+  throttleSecondsLeft: number;
   events: EventItem[];
 };
+
+function StatusChip({ status, since }: { status: 'IN' | 'OUT'; since: string | null }) {
+  const sinceStr = since ? new Date(since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+  const label = status === 'IN' ? `Clocked in${sinceStr ? ` since ${sinceStr}` : ''}` : 'Out';
+  return (
+    <span
+      className={[
+        'inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ring-1',
+        status === 'IN' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-gray-50 text-gray-700 ring-gray-200',
+      ].join(' ')}
+    >
+      <span className="h-2 w-2 rounded-full bg-current opacity-60" />
+      {label}
+    </span>
+  );
+}
 
 export default function MyAttendancePage() {
   const [loading, setLoading] = useState(false);
   const [today, setToday] = useState<TodayResponse | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [throttleLeft, setThrottleLeft] = useState(0);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -34,9 +54,19 @@ export default function MyAttendancePage() {
     }
     const j = (await res.json()) as TodayResponse;
     setToday(j);
+    setThrottleLeft(j.throttleSecondsLeft ?? 0);
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // countdown for throttle
+  useEffect(() => {
+    if (throttleLeft <= 0) return;
+    const t = setInterval(() => {
+      setThrottleLeft((s) => (s > 0 ? s - 1 : 0));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [throttleLeft]);
 
   const buttonLabel = useMemo(() => {
     if (!today) return '…';
@@ -62,14 +92,11 @@ export default function MyAttendancePage() {
 
     let lat: number | undefined;
     let lng: number | undefined;
-
     const pos = await getPosition();
     if (pos) {
       lat = pos.coords.latitude;
       lng = pos.coords.longitude;
     }
-    // NOTE: Browsers can’t get Wi-Fi BSSID for privacy; mobile app will send it later.
-    const wifiBSSID = undefined;
 
     try {
       const res = await fetch('/api/attendance/punch', {
@@ -79,18 +106,27 @@ export default function MyAttendancePage() {
           type: today.currentAction,
           source: 'WEB',
           lat, lng,
-          wifiBSSID,
+          wifiBSSID: undefined, // browsers can't access BSSID
         }),
       });
+
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j.error || 'Punch failed');
+        if (res.status === 429 && typeof j.retryAfterSeconds === 'number') {
+          setThrottleLeft(j.retryAfterSeconds);
+          setErr(`Please wait ${j.retryAfterSeconds}s before punching again.`);
+        } else {
+          setErr(j.error || 'Punch failed');
+        }
+        return;
       }
+
       const j = await res.json();
       const within = j?.event?.withinGeofence;
+      const site = j?.event?.site as string | undefined;
       setMsg(
         `${today.currentAction === 'CLOCK_IN' ? 'Clocked in' : 'Clocked out'} • ` +
-        (within === true ? 'Inside site' : within === false ? 'Outside site' : 'No location')
+        (within === true ? `Inside${site ? ' (' + site + ')' : ''}` : within === false ? 'Outside site' : 'No location')
       );
       await load();
     } catch (e: any) {
@@ -102,19 +138,24 @@ export default function MyAttendancePage() {
 
   return (
     <>
-      <h1 className="text-xl font-semibold">My attendance</h1>
-      <p className="mt-1 text-sm text-gray-600">Clock history & current status.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">My attendance</h1>
+          <p className="mt-1 text-sm text-gray-600">Clock history & current status.</p>
+        </div>
+        {today && <StatusChip status={today.status} since={today.since} />}
+      </div>
 
       <div className="mt-5 flex items-center gap-3">
         <button
           onClick={punch}
-          disabled={!today || loading}
+          disabled={!today || loading || throttleLeft > 0}
           className={[
             'inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-white transition',
             today?.currentAction === 'CLOCK_IN'
               ? 'bg-emerald-600 hover:bg-emerald-700'
               : 'bg-rose-600 hover:bg-rose-700',
-            loading && 'opacity-70'
+            (loading || throttleLeft > 0) && 'opacity-70'
           ].filter(Boolean).join(' ')}
         >
           {loading ? (
@@ -122,10 +163,10 @@ export default function MyAttendancePage() {
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
               Processing…
             </>
+          ) : throttleLeft > 0 ? (
+            <>Wait {throttleLeft}s</>
           ) : (
-            <>
-              {buttonLabel}
-            </>
+            <>{buttonLabel}</>
           )}
         </button>
 

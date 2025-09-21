@@ -3,13 +3,11 @@ import { prisma } from '@repo/db';
 import { z } from 'zod';
 import { requireUser } from '@/lib/session';
 
-// NOTE: wifiSSIDs in WorkSite can hold SSIDs or BSSIDs (MACs). We match case-insensitively.
 const Body = z.object({
   type: z.enum(['CLOCK_IN', 'CLOCK_OUT']).optional(),     // if omitted => toggle
   notes: z.string().max(500).optional(),
   source: z.enum(['WEB', 'MOBILE', 'KIOSK']).optional(),  // default WEB
-  // Prefer Wi-Fi match; if not available, use GPS:
-  wifiBSSID: z.string().min(1).optional(),                // e.g., "AA:BB:CC:DD:EE:FF" or SSID
+  wifiBSSID: z.string().min(1).optional(),                // BSSID or SSID (case-insensitive match)
   lat: z.number().optional(),
   lng: z.number().optional(),
 });
@@ -21,7 +19,6 @@ function getIP(req: Request) {
 }
 
 function toRad(x: number) { return (x * Math.PI) / 180; }
-// Haversine distance in meters
 function metersBetween(aLat: number, aLng: number, bLat: number, bLng: number) {
   const R = 6371000;
   const dLat = toRad(bLat - aLat);
@@ -39,6 +36,9 @@ function normalizeWifi(val?: string | null) {
   return (val ?? '').trim().toLowerCase();
 }
 
+// Throttle accidental double-punches (seconds)
+const THROTTLE_SECONDS = parseInt(process.env.PUNCH_THROTTLE_SECONDS ?? '12', 10);
+
 export async function POST(req: Request) {
   try {
     const user = await requireUser();
@@ -52,19 +52,31 @@ export async function POST(req: Request) {
     const last = await prisma.attendanceEvent.findFirst({
       where: { userId: user.id },
       orderBy: { at: 'desc' },
-      select: { type: true },
+      select: { type: true, at: true },
     });
+
+    // Throttle guard
+    const now = new Date();
+    if (last) {
+      const delta = (now.getTime() - new Date(last.at).getTime()) / 1000;
+      const remain = Math.max(0, Math.ceil(THROTTLE_SECONDS - delta));
+      if (delta < THROTTLE_SECONDS) {
+        return NextResponse.json(
+          { error: 'too_soon', retryAfterSeconds: remain },
+          { status: 429 }
+        );
+      }
+    }
+
     const nextType = type ?? (last?.type === 'CLOCK_IN' ? 'CLOCK_OUT' : 'CLOCK_IN');
 
     // Fetch org sites
-    const sites = await prisma.workSite.findMany({
-      where: { orgId: user.orgId },
-    });
+    const sites = await prisma.workSite.findMany({ where: { orgId: user.orgId } });
 
     let matchedSiteName: string | null = null;
     let withinGeofence: boolean | null = null;
 
-    // 1) Prefer Wi-Fi (match against any stored SSID/BSSID string, case-insensitive)
+    // Prefer Wi-Fi match
     const wifiNorm = normalizeWifi(wifiBSSID);
     if (wifiNorm && sites.length) {
       for (const s of sites) {
@@ -78,7 +90,7 @@ export async function POST(req: Request) {
       if (withinGeofence === null) withinGeofence = false;
     }
 
-    // 2) Fallback to GPS if no Wi-Fi verdict
+    // GPS fallback
     if (withinGeofence === null && typeof lat === 'number' && typeof lng === 'number' && sites.length) {
       let inAny = false;
       let foundName: string | null = null;
@@ -101,7 +113,7 @@ export async function POST(req: Request) {
         userId: user.id,
         type: nextType,
         source,
-        at: new Date(), // server time is authoritative
+        at: now, // server time
         latitude: typeof lat === 'number' ? String(lat) as any : null,
         longitude: typeof lng === 'number' ? String(lng) as any : null,
         withinGeofence: withinGeofence ?? null,
@@ -118,7 +130,7 @@ export async function POST(req: Request) {
         type: ev.type,
         at: ev.at,
         withinGeofence: ev.withinGeofence,
-        site: matchedSiteName,
+        site: matchedSiteName, // <- site name included
       },
       next: nextType,
     });
