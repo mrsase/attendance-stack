@@ -1,11 +1,13 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "ui": "tui",
+  "globalEnv": ["NODE_ENV", "AUTH_COOKIE_NAME", "SESSION_TTL_DAYS", "DATABASE_URL"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": [".next/**", "!.next/cache/**"]
+      "inputs": ["$TURBO_DEFAULT$", ".env*", "apps/*/.env*", "packages/*/.env*"],
+      "outputs": [".next/**", "!.next/cache/**"],
+      "env": ["NODE_ENV", "AUTH_COOKIE_NAME", "SESSION_TTL_DAYS", "DATABASE_URL"]
     },
     "lint": {
       "dependsOn": ["^lint"]
@@ -15,7 +17,8 @@
     },
     "dev": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "env": ["NODE_ENV", "AUTH_COOKIE_NAME", "SESSION_TTL_DAYS", "DATABASE_URL"]
     }
   }
 }

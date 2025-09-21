@@ -84,6 +84,8 @@ model User {
   auditLogs     AuditLog[]      @relation("AuditActor")
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
+
+  Session Session[]
 }
 
 model RoleAssignment {
@@ -169,4 +171,17 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   @@index([entity, entityId])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  userAgent  String?
+  ip         String?
+
+  @@index([userId, expiresAt])
 }
