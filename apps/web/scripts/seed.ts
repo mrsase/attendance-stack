@@ -64,10 +64,9 @@ async function upsertUser(orgId: string, u: SeedUser) {
         },
       });
 
+  // Assign roles (idempotent-ish)
   for (const r of u.roles) {
-    const deptForRole = r.departmentName
-      ? await upsertDepartment(orgId, r.departmentName)
-      : null;
+    const deptForRole = r.departmentName ? await upsertDepartment(orgId, r.departmentName) : null;
     const already = await prisma.roleAssignment.findFirst({
       where: { userId: user.id, role: r.role, departmentId: deptForRole?.id ?? null },
     });
@@ -86,21 +85,44 @@ async function upsertUser(orgId: string, u: SeedUser) {
 }
 
 async function main() {
-  // 1) Organization
+  // 1) Organization FIRST (fixes "used before declaration")
   const org = await prisma.organization.upsert({
     where: { name: 'Acme Co' },
     update: {},
     create: { name: 'Acme Co' },
   });
 
-  // 2) Departments
+  // 2) Default company calendar (Sun–Wed 09:00–17:00, Thu 09:00–13:00, Fri off)
+  const cal = await prisma.workCalendar.upsert({
+    where: { orgId_name: { orgId: org.id, name: 'Default Calendar' } },
+    update: {},
+    create: {
+      orgId: org.id,
+      name: 'Default Calendar',
+      timezone: 'Asia/Tehran',
+      weekendDays: [5], // Friday (adjust per policy)
+      rules: {
+        create: [
+          { weekday: 0, startMin: 9 * 60, endMin: 17 * 60, isOff: false }, // Sun
+          { weekday: 1, startMin: 9 * 60, endMin: 17 * 60, isOff: false }, // Mon
+          { weekday: 2, startMin: 9 * 60, endMin: 17 * 60, isOff: false }, // Tue
+          { weekday: 3, startMin: 9 * 60, endMin: 17 * 60, isOff: false }, // Wed
+          { weekday: 4, startMin: 9 * 60, endMin: 13 * 60, isOff: false }, // Thu (short)
+          { weekday: 5, isOff: true }, // Fri
+          { weekday: 6, isOff: true }, // Sat (adjust if needed)
+        ],
+      },
+    },
+  });
+
+  // 3) Departments
   const ops = await upsertDepartment(org.id, 'Operations');
   const eng = await upsertDepartment(org.id, 'Engineering');
-  const hr = await upsertDepartment(org.id, 'HR');
+  const hr  = await upsertDepartment(org.id, 'HR');
 
-  // 3) Work site (HQ)
+  // 4) Work site (HQ) for geofence tests
   await prisma.workSite.upsert({
-    where: { id: `${org.id}-hq` },
+    where: { id: `${org.id}-hq` }, // stable ID we control
     update: {
       name: 'HQ',
       latitude: 35.7069,
@@ -119,7 +141,7 @@ async function main() {
     },
   });
 
-  // 4) Users
+  // 5) Users with roles
   const users: SeedUser[] = [
     {
       name: 'IT Manager',
@@ -160,9 +182,18 @@ async function main() {
 
   for (const u of users) {
     const created = await upsertUser(org.id, u);
-    console.log(
-      `Seeded: ${u.name} <${u.email}> (password: ChangeMe!123) id=${created.id}`
-    );
+    console.log(`Seeded: ${u.name} <${u.email}> (password: ChangeMe!123) id=${created.id}`);
+  }
+
+  // 6) Assign default calendar to any user lacking an assignment
+  const allUsers = await prisma.user.findMany({ where: { orgId: org.id }, select: { id: true } });
+  for (const u of allUsers) {
+    const assigned = await prisma.calendarAssignment.findFirst({ where: { userId: u.id } });
+    if (!assigned) {
+      await prisma.calendarAssignment.create({
+        data: { userId: u.id, calendarId: cal.id, isPrimary: true },
+      });
+    }
   }
 
   console.log('Seed complete. Try logging in as it.manager@example.com / ChangeMe!123');

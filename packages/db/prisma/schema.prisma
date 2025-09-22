@@ -49,6 +49,8 @@ model Organization {
   updatedAt   DateTime     @updatedAt
 
   Holiday Holiday[]
+
+  WorkCalendar WorkCalendar[]
 }
 
 model Department {
@@ -86,6 +88,8 @@ model User {
   updatedAt     DateTime        @updatedAt
 
   Session Session[]
+
+  CalendarAssignment CalendarAssignment[]
 }
 
 model RoleAssignment {
@@ -148,17 +152,6 @@ model LeaveRequest {
   @@index([userId, startAt, endAt])
 }
 
-model Holiday {
-  id        String    @id @default(cuid())
-  orgId     String
-  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  date      DateTime
-  label     String
-  createdAt DateTime  @default(now())
-
-  @@unique([orgId, date])
-}
-
 model AuditLog {
   id        String   @id @default(cuid())
   actorId   String?
@@ -184,4 +177,70 @@ model Session {
   ip         String?
 
   @@index([userId, expiresAt])
+}
+
+model WorkCalendar {
+  id           String             @id @default(cuid())
+  orgId        String
+  org          Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name         String
+  timezone     String             @default("Asia/Tehran")
+  weekendDays  Int[]              // 0=Sun ... 6=Sat
+  rules        CalendarRule[]
+  assignments  CalendarAssignment[]
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([orgId, name])
+}
+
+model CalendarRule {
+  id          String        @id @default(cuid())
+  calendarId  String
+  calendar    WorkCalendar  @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  /// 0=Sunday ... 6=Saturday (match JS Date.getDay())
+  weekday     Int
+
+  /// Minutes from midnight (local to calendar.timezone). Null + isOff=true => day off.
+  startMin    Int?
+  endMin      Int?
+  isOff       Boolean       @default(false)
+
+  @@unique([calendarId, weekday])
+}
+
+model CalendarAssignment {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendarId  String
+  calendar    WorkCalendar  @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  /// Optional effective window (inclusive start, exclusive end)
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+  isPrimary     Boolean      @default(true)
+
+  @@index([userId, effectiveFrom, effectiveTo])
+}
+
+model Holiday {
+  id        String         @id @default(cuid())
+  orgId     String
+  org       Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  /// Store as UTC midnight for the local day represented (Jalali or Gregorian).
+  date      DateTime
+  name      String
+
+  /// If true, `date` represents a Jalali day converted to UTC midnight.
+  isJalali  Boolean        @default(true)
+
+  /// Optional original Jalali string ("YYYY-MM-DD") for audit/UI.
+  jalaliDate String?
+
+  createdAt DateTime       @default(now())
+
+  @@unique([orgId, date])
 }
