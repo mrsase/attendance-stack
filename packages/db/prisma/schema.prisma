@@ -1,10 +1,13 @@
 generator client {
   provider = "prisma-client-js"
 }
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+/* ===== Enums ===== */
 
 enum Role {
   SUPER_ADMIN
@@ -27,7 +30,7 @@ enum AttendanceSource {
   KIOSK
 }
 
-enum LeaveKind {
+enum LeaveType {
   HOURLY
   DAILY
 }
@@ -39,18 +42,20 @@ enum LeaveStatus {
   CANCELLED
 }
 
+/* ===== Core Org Models ===== */
+
 model Organization {
-  id          String       @id @default(cuid())
-  name        String       @unique
+  id          String        @id @default(cuid())
+  name        String        @unique
   departments Department[]
   users       User[]
   workSites   WorkSite[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  calendars   WorkCalendar[]
+  holidays    Holiday[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
-  Holiday Holiday[]
-
-  WorkCalendar WorkCalendar[]
+  LeaveRequest LeaveRequest[]
 }
 
 model Department {
@@ -63,33 +68,42 @@ model Department {
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
-  @@unique([orgId, name])
+  // role assignments scoped to this department (optional)
   RoleAssignment RoleAssignment[]
+
+  @@unique([orgId, name])
+  LeaveRequest LeaveRequest[]
 }
 
 model User {
-  id            String          @id @default(cuid())
+  id            String           @id @default(cuid())
   orgId         String
-  org           Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  email         String          @unique
+  org           Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  email         String           @unique
   name          String
   phone         String?
   passwordHash  String?
-  isActive      Boolean         @default(true)
+  isActive      Boolean          @default(true)
   timeZone      String?
   departmentId  String?
-  department    Department?     @relation(fields: [departmentId], references: [id])
+  department    Department?      @relation(fields: [departmentId], references: [id])
+
   roles         RoleAssignment[]
   attendance    AttendanceEvent[]
-  leaves        LeaveRequest[]  @relation("LeaveOwner")
-  approvals     LeaveRequest[]  @relation("LeaveApprover")
-  auditLogs     AuditLog[]      @relation("AuditActor")
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
 
-  Session Session[]
+  // Leave relations
+  leaves        LeaveRequest[]   @relation("LeaveRequester")
+  approvals     LeaveRequest[]   @relation("LeaveApprover")
 
+  // Audit & auth
+  auditLogs     AuditLog[]       @relation("AuditActor")
+  Session       Session[]
+
+  // Calendars
   CalendarAssignment CalendarAssignment[]
+
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 }
 
 model RoleAssignment {
@@ -105,52 +119,72 @@ model RoleAssignment {
 }
 
 model WorkSite {
-  id            String       @id @default(cuid())
+  id            String        @id @default(cuid())
   orgId         String
-  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   name          String
-  latitude      Decimal      @db.Decimal(9,6)
-  longitude     Decimal      @db.Decimal(9,6)
-  radiusMeters  Int          @default(100)
-  wifiSSIDs     String[]     @db.Text
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  latitude      Decimal       @db.Decimal(9, 6)
+  longitude     Decimal       @db.Decimal(9, 6)
+  radiusMeters  Int           @default(100)
+  wifiSSIDs     String[]      @db.Text
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 }
 
 model AttendanceEvent {
-  id              String           @id @default(cuid())
+  id              String            @id @default(cuid())
   userId          String
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   type            AttendanceType
   source          AttendanceSource
-  at              DateTime         @default(now())
-  latitude        Decimal?         @db.Decimal(9,6)
-  longitude       Decimal?         @db.Decimal(9,6)
+  at              DateTime          @default(now())
+  latitude        Decimal?          @db.Decimal(9, 6)
+  longitude       Decimal?          @db.Decimal(9, 6)
   withinGeofence  Boolean?
   ip              String?
   wifiBSSID       String?
   notes           String?
-  createdAt       DateTime         @default(now())
+  createdAt       DateTime          @default(now())
 
   @@index([userId, at])
 }
 
-model LeaveRequest {
-  id          String      @id @default(cuid())
-  userId      String
-  user        User        @relation("LeaveOwner", fields: [userId], references: [id], onDelete: Cascade)
-  kind        LeaveKind
-  status      LeaveStatus @default(PENDING)
-  reason      String?
-  startAt     DateTime
-  endAt       DateTime
-  approverId  String?
-  approver    User?       @relation("LeaveApprover", fields: [approverId], references: [id])
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+/* ===== Leave Requests (updated) ===== */
 
-  @@index([userId, startAt, endAt])
+model LeaveRequest {
+  id            String        @id @default(cuid())
+  orgId         String
+  org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  userId        String
+  user          User          @relation("LeaveRequester", fields: [userId], references: [id], onDelete: Cascade)
+
+  // snapshot routing scope at submit time
+  departmentId  String?
+  department    Department?   @relation(fields: [departmentId], references: [id])
+
+  type          LeaveType
+  status        LeaveStatus    @default(PENDING)
+
+  startAt       DateTime       // inclusive
+  endAt         DateTime       // exclusive
+  reason        String?        @db.VarChar(500)
+
+  approverId    String?
+  approver      User?          @relation("LeaveApprover", fields: [approverId], references: [id])
+  approverRole  String?
+  decisionNote  String?
+  decidedAt     DateTime?
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([orgId, status])
+  @@index([departmentId, status])
+  @@index([userId, createdAt])
 }
+
+/* ===== Audit & Session ===== */
 
 model AuditLog {
   id        String   @id @default(cuid())
@@ -178,6 +212,8 @@ model Session {
 
   @@index([userId, expiresAt])
 }
+
+/* ===== Calendars & Holidays ===== */
 
 model WorkCalendar {
   id           String             @id @default(cuid())
@@ -211,36 +247,36 @@ model CalendarRule {
 }
 
 model CalendarAssignment {
-  id          String        @id @default(cuid())
-  userId      String
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  calendarId  String
-  calendar    WorkCalendar  @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendarId    String
+  calendar      WorkCalendar  @relation(fields: [calendarId], references: [id], onDelete: Cascade)
 
   /// Optional effective window (inclusive start, exclusive end)
   effectiveFrom DateTime?
   effectiveTo   DateTime?
-  isPrimary     Boolean      @default(true)
+  isPrimary     Boolean       @default(true)
 
   @@index([userId, effectiveFrom, effectiveTo])
 }
 
 model Holiday {
-  id        String         @id @default(cuid())
-  orgId     String
-  org       Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id         String        @id @default(cuid())
+  orgId      String
+  org        Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   /// Store as UTC midnight for the local day represented (Jalali or Gregorian).
-  date      DateTime
-  name      String
+  date       DateTime
+  name       String
 
   /// If true, `date` represents a Jalali day converted to UTC midnight.
-  isJalali  Boolean        @default(true)
+  isJalali   Boolean       @default(true)
 
   /// Optional original Jalali string ("YYYY-MM-DD") for audit/UI.
   jalaliDate String?
 
-  createdAt DateTime       @default(now())
+  createdAt  DateTime      @default(now())
 
   @@unique([orgId, date])
 }
