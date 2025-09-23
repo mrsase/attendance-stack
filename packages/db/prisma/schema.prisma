@@ -42,6 +42,12 @@ enum LeaveStatus {
   CANCELLED
 }
 
+enum CorrectionAction {
+  ADD
+  UPDATE
+  DELETE
+}
+
 /* ===== Core Org Models ===== */
 
 model Organization {
@@ -52,10 +58,13 @@ model Organization {
   workSites   WorkSite[]
   calendars   WorkCalendar[]
   holidays    Holiday[]
+
+  // Back-relations
+  leaveRequests       LeaveRequest[]
+  attendanceCorrections AttendanceCorrection[]
+
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
-
-  LeaveRequest LeaveRequest[]
 }
 
 model Department {
@@ -65,20 +74,23 @@ model Department {
   name      String
   parentId  String?
   users     User[]
+
+  // Back-relations
+  roleAssignments       RoleAssignment[]
+  leaveRequests         LeaveRequest[]
+  attendanceCorrections AttendanceCorrection[]
+
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
-  // role assignments scoped to this department (optional)
-  RoleAssignment RoleAssignment[]
-
   @@unique([orgId, name])
-  LeaveRequest LeaveRequest[]
 }
 
 model User {
   id            String           @id @default(cuid())
   orgId         String
   org           Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
   email         String           @unique
   name          String
   phone         String?
@@ -91,9 +103,13 @@ model User {
   roles         RoleAssignment[]
   attendance    AttendanceEvent[]
 
-  // Leave relations
+  // Leave relations (two relations to User → must be named)
   leaves        LeaveRequest[]   @relation("LeaveRequester")
   approvals     LeaveRequest[]   @relation("LeaveApprover")
+
+  // Corrections relations (two relations to User → must be named)
+  corrections             AttendanceCorrection[] @relation("CorrectionRequester")
+  correctionApprovals     AttendanceCorrection[] @relation("CorrectionApprover")
 
   // Audit & auth
   auditLogs     AuditLog[]       @relation("AuditActor")
@@ -126,7 +142,7 @@ model WorkSite {
   latitude      Decimal       @db.Decimal(9, 6)
   longitude     Decimal       @db.Decimal(9, 6)
   radiusMeters  Int           @default(100)
-  wifiSSIDs     String[]      @db.Text
+  wifiSSIDs     String[]      // Postgres text[] (no native type needed)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 }
@@ -146,10 +162,13 @@ model AttendanceEvent {
   notes           String?
   createdAt       DateTime          @default(now())
 
+  // Back-relation from AttendanceCorrection.targetEvent
+  corrections     AttendanceCorrection[]
+
   @@index([userId, at])
 }
 
-/* ===== Leave Requests (updated) ===== */
+/* ===== Leave Requests ===== */
 
 model LeaveRequest {
   id            String        @id @default(cuid())
@@ -181,6 +200,45 @@ model LeaveRequest {
 
   @@index([orgId, status])
   @@index([departmentId, status])
+  @@index([userId, createdAt])
+}
+
+/* ===== Attendance Corrections ===== */
+
+model AttendanceCorrection {
+  id            String            @id @default(cuid())
+
+  orgId         String
+  org           Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  userId        String
+  user          User              @relation("CorrectionRequester", fields: [userId], references: [id], onDelete: Cascade)
+
+  departmentId  String?
+  department    Department?       @relation(fields: [departmentId], references: [id])
+
+  action        CorrectionAction
+
+  // Optional target (for UPDATE / DELETE)
+  targetEventId String?
+  targetEvent   AttendanceEvent?  @relation(fields: [targetEventId], references: [id])
+
+  // Proposed data (for ADD / UPDATE)
+  proposedType  AttendanceType?
+  proposedAt    DateTime?
+  proposedNote  String?           @db.VarChar(500)
+
+  status        LeaveStatus       @default(PENDING) // reuse statuses
+  approverId    String?
+  approver      User?             @relation("CorrectionApprover", fields: [approverId], references: [id])
+  approverRole  String?
+  decisionNote  String?
+  decidedAt     DateTime?
+
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([orgId, status])
   @@index([userId, createdAt])
 }
 
